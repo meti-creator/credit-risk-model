@@ -1,0 +1,43 @@
+name: Credit Risk Pipeline CI Quality Gate
+
+# Trigger this workflow automatically on every push or pull request to the main branch
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  quality-assurance:
+    runs-on: ubuntu-latest
+
+    steps:
+    # Step 1: Clone your code from GitHub into the virtual runner environment
+    - name: Checkout Repository Code
+      uses: actions/checkout@v3
+
+    # Step 2: Set up a clean Python environment on the virtual cloud machine
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+
+    # Step 3: Install all required library dependencies
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install flake8 pytest
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+    # Step 4: Run Flake8 Linter to stop the line if there are structural python syntax errors
+    - name: Run Code Linter (Flake8)
+      run: |
+        # stop the build if there are Python syntax errors or undefined names
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        # exit-zero treats all warnings as advice so formatting spacing doesn't block completion
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+    # Step 5: Execute your pytest unit tests to ensure processing algebra functions pass
+    - name: Run Passing Unit Tests (Pytest)
+      run: |
+        pytest
