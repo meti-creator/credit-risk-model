@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  api:
+    build: .
+    container_name: credit_risk_api_container
+    # Maps your local machine's port 8000 to the container's internal port 8000
+    ports:
+      - "8000:8000"
+    # Mounts your tracking database files so the container can read your MLflow models
+    volumes:
+      - ./mlflow.db:/app/mlflow.db
+      - ./mlruns:/app/mlruns
+    restart: always
