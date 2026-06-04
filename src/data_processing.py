@@ -265,7 +265,7 @@ def execute_instructional_pipeline():
 
     # Standard categorical conveyor belt
     categorical_conveyor = Pipeline(steps=[
-        ('imputer', SimpleImputer(strategy='constant', fill_value='Missing')),
+        ('imputer', SimpleImputer(strategy='constant', fill_value=0.0)),
         ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))
     ])
 
