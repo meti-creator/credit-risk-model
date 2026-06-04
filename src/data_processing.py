@@ -6,9 +6,10 @@ from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.cluster import KMeans
 
 # =====================================================================
-# Local WOE transformer implementation (avoids xverse compatibility issues)
+# LOCAL WOE TRANSFORMER IMPLEMENTATION
 # =====================================================================
 class WOETransformer(BaseEstimator, TransformerMixin):
     """Simple Weight-of-Evidence transformer for selected categorical features."""
@@ -107,41 +108,45 @@ class WOETransformer(BaseEstimator, TransformerMixin):
 
 
 # =====================================================================
-# 1. REQUIREMENT: CREATE AGGREGATE FEATURES
+# REVISED UPDATED TRANSFORMER: CALCULATES RFM & VOLATILITY METRICS
 # =====================================================================
 class CustomerBehaviorAggregator(BaseEstimator, TransformerMixin):
     """
-    Computes customer-level historical profiles:
-    - Total Transaction Amount (Sum)
-    - Average Transaction Amount (Mean)
-    - Transaction Count (Count)
-    - Standard Deviation of Transaction Amounts (Variability)
+    Computes customer-level historical RFM profiles:
+    - Recency: Days since last transaction relative to global snapshot date
+    - Frequency: Total transaction count per customer
+    - Monetary: Sum of all transaction amounts per customer
+    - Standard_Deviation_Transaction_Amount: Variability of transaction amounts
     """
-    def __init__(self, customer_id_col='CustomerId', amount_col='Amount'):
+    def __init__(self, customer_id_col='CustomerId', amount_col='Amount', datetime_col='TransactionStartTime'):
         self.customer_id_col = customer_id_col
         self.amount_col = amount_col
+        self.datetime_col = datetime_col
         self.customer_profiles_ = None
         self.global_defaults_ = {}
 
     def fit(self, X, y=None):
         X_df = pd.DataFrame(X).copy()
+        X_df[self.datetime_col] = pd.to_datetime(X_df[self.datetime_col])
         
-        # Aggregate logic calculations per customer
+        # Consistent Data-Driven Snapshot Date: 1 day after the global maximum transaction date
+        snapshot_date = X_df[self.datetime_col].max() + pd.Timedelta(days=1)
+        
+        # Calculate full suite of RFM + Volatility Metrics
         profiles = X_df.groupby(self.customer_id_col).agg(
-            Total_Transaction_Amount=(self.amount_col, 'sum'),
-            Average_Transaction_Amount=(self.amount_col, 'mean'),
-            Transaction_Count=(self.amount_col, 'count'),
+            Recency=(self.datetime_col, lambda x: (snapshot_date - x.max()).days),
+            Frequency=(self.amount_col, 'count'),
+            Monetary=(self.amount_col, 'sum'),
             Standard_Deviation_Transaction_Amount=(self.amount_col, 'std')
         )
-        # Handle cases where customer has only 1 transaction (std dev becomes NaN)
         profiles['Standard_Deviation_Transaction_Amount'] = profiles['Standard_Deviation_Transaction_Amount'].fillna(0.0)
         self.customer_profiles_ = profiles
         
-        # Cold-start fallback via Imputation (Median / Mean baselines)
+        # Safe Imputation fallbacks for cold starts
         self.global_defaults_ = {
-            'Total_Transaction_Amount': X_df[self.amount_col].median(),
-            'Average_Transaction_Amount': X_df[self.amount_col].mean(),
-            'Transaction_Count': 1.0,
+            'Recency': profiles['Recency'].median(),
+            'Frequency': 1.0,
+            'Monetary': X_df[self.amount_col].median(),
             'Standard_Deviation_Transaction_Amount': 0.0
         }
         return self
@@ -152,11 +157,9 @@ class CustomerBehaviorAggregator(BaseEstimator, TransformerMixin):
         X_df = pd.DataFrame(X).copy()
         X_merged = X_df.merge(self.customer_profiles_, on=self.customer_id_col, how='left')
         
-        # Infill unseen customer values
         for col, default_val in self.global_defaults_.items():
             X_merged[col] = X_merged[col].fillna(default_val)
             
-        # Drop unique text ID so it doesn't break downstream mathematical matrices
         if self.customer_id_col in X_merged.columns:
             X_merged = X_merged.drop(columns=[self.customer_id_col])
             
@@ -164,16 +167,10 @@ class CustomerBehaviorAggregator(BaseEstimator, TransformerMixin):
 
 
 # =====================================================================
-# 2. REQUIREMENT: EXTRACT TEMPORAL FEATURES
+# TEMPORAL FEATURE EXTRACTOR
 # =====================================================================
 class TemporalFeatureExtractor(BaseEstimator, TransformerMixin):
-    """
-    Extracts time features from raw timestamp components:
-    - Transaction Hour
-    - Transaction Day
-    - Transaction Month
-    - Transaction Year
-    """
+    """Extracts hour, day, month, and year from datetime column text."""
     def __init__(self, datetime_col='TransactionStartTime'):
         self.datetime_col = datetime_col
 
@@ -182,123 +179,126 @@ class TemporalFeatureExtractor(BaseEstimator, TransformerMixin):
 
     def transform(self, X):
         X_df = pd.DataFrame(X).copy()
-        
         if self.datetime_col in X_df.columns:
             datetime_series = pd.to_datetime(X_df[self.datetime_col])
-            
             X_df['Transaction_Hour'] = datetime_series.dt.hour
             X_df['Transaction_Day'] = datetime_series.dt.day
             X_df['Transaction_Month'] = datetime_series.dt.month
             X_df['Transaction_Year'] = datetime_series.dt.year
-            
-            # Remove raw text timestamp column after extraction
             X_df = X_df.drop(columns=[self.datetime_col])
-            
         return X_df
 
 
 # =====================================================================
-# 3. UNIFIED PRODUCTION EXECUTIVE PIPELINE ENGINE
+# PIPELINE ARCHITECTURE ENGINE
 # =====================================================================
 def execute_instructional_pipeline():
-    print("🚀 Initiating Final Credit Risk Preprocessing Pipeline Engine...")
+    print("Initiating Labeled Credit Risk Preprocessing Pipeline Engine...")
     
-    # Automated Working Directory Path Mapping
     script_directory = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(script_directory)
     raw_data_path = os.path.join(project_root, 'data', 'raw', 'data.csv')
     
     if not os.path.exists(raw_data_path):
-        raise FileNotFoundError(f"❌         python src/data_processing.py Raw dataset missing from source tree layout: {raw_data_path}")
+        raise FileNotFoundError(f"❌ Raw dataset missing from path layout: {raw_data_path}")
         
     df = pd.read_csv(raw_data_path)
-    print(f"📊 Dataset Loaded Successfully. Row/Column Shape: {df.shape}")
+    print(f"📊 Raw Dataset Loaded. Shape: {df.shape}")
     
-    # Run-time Target Vector Detection & Isolation
-    target_names = ['Target', 'FraudResult', 'target', 'fraud_result']
-    target_col = next((col for col in target_names if col in df.columns), None)
-    if target_col is not None:
-        y = df[target_col].values
-        X_raw = df.drop(columns=[target_col])
-    else:
-        print("⚠️ Target column not detected. Generating standard binary placeholder vector...")
-        np.random.seed(42)
-        y = np.random.choice([0, 1], size=len(df), p=[0.95, 0.05])
-        X_raw = df.copy()
+    # -----------------------------------------------------------------
+    # STEP 1: CALCULATE RFM AND GENERATE TARGET PROXY VIA K-MEANS
+    # -----------------------------------------------------------------
+    print("Compiling global snapshot date and standalone RFM metrics...")
+    df['TransactionStartTime'] = pd.to_datetime(df['TransactionStartTime'])
+    global_snapshot = df['TransactionStartTime'].max() + pd.Timedelta(days=1)
+    
+    rfm_profiles = df.groupby('CustomerId').agg(
+        Recency=('TransactionStartTime', lambda x: (global_snapshot - x.max()).days),
+        Frequency=('Amount', 'count'),
+        Monetary=('Amount', 'sum')
+    ).reset_index()
+    
+    # Scale features uniformly to prevent unit bias distortion in distance tracking
+    scaler = StandardScaler()
+    scaled_rfm = scaler.fit_transform(rfm_profiles[['Recency', 'Frequency', 'Monetary']])
+    
+    print("Segmenting unique customers using K-Means clustering (k=3)...")
+    kmeans = KMeans(n_clusters=3, random_state=42, n_init=10)
+    rfm_profiles['Cluster'] = kmeans.fit_predict(scaled_rfm)
+    
+    # Automated cluster inspection to tag the unengaged cluster group
+    cluster_analysis = rfm_profiles.groupby('Cluster').agg({'Frequency': 'mean'})
+    high_risk_cluster_id = cluster_analysis['Frequency'].idxmin()
+    print(f"Automated Target Resolution: Identified Cluster {high_risk_cluster_id} as High-Risk Proxy.")
+    
+    # Generate and map the binary label vector
+    rfm_profiles['is_high_risk'] = (rfm_profiles['Cluster'] == high_risk_cluster_id).astype(int)
+    target_map = dict(zip(rfm_profiles['CustomerId'], rfm_profiles['is_high_risk']))
+    
+    # Establish our final target variable column
+    df['is_high_risk'] = df['CustomerId'].map(target_map)
+    y = df['is_high_risk'].values
+    print(f" Proxy target 'is_high_risk' constructed! Default Class Distribution: {np.bincount(y)}")
 
-    # Exclude strict high-cardinality alphanumeric text markers from matrix calculations
-    tracking_keys = ['TransactionId']
-    X_features = X_raw.drop(columns=[col for col in tracking_keys if col in X_raw.columns])
+    # -----------------------------------------------------------------
+    # STEP 2: ORCHESTRATE THE PRIMARY FEATURES PIPELINE
+    # -----------------------------------------------------------------
+    X_features = df.drop(columns=['TransactionId', 'is_high_risk'])
     
-    # Declare Base Preprocessing Schemas
     num_features = ['Amount', 'Value', 'PricingStrategy']
     cat_features = ['ProductCategory', 'ChannelId', 'ProviderId']
     
-    # Cross-reference with columns actually existing inside your dataset variants
     num_features = [col for col in num_features if col in X_features.columns]
     cat_features = [col for col in cat_features if col in X_features.columns]
     
-    # Appended list tracking the numeric parameters engineered dynamically by your custom blocks
+    # Dynamic schema tracking pipeline extensions
     extended_numeric_schema = num_features + [
         'Transaction_Hour', 'Transaction_Day', 'Transaction_Month', 'Transaction_Year',
-        'Total_Transaction_Amount', 'Average_Transaction_Amount', 'Transaction_Count', 'Standard_Deviation_Transaction_Amount'
+        'Recency', 'Frequency', 'Monetary', 'Standard_Deviation_Transaction_Amount'
     ]
     
-    print("⚙️ Processing Conveyor: Imputing Missing Values, Encoding Categoricals, and Standardizing...")
-    
-    # =====================================================================
-    # 4. REQUIREMENTS: MISSING VALUES, ENCODING & STANDARDIZATION
-    # =====================================================================
+    # Standard numerical conveyor belt
     numeric_conveyor = Pipeline(steps=[
-        ('imputer', SimpleImputer(strategy='median')),       # Handle Missing Values via Median Imputation
-        ('scaler', StandardScaler())                         # Standardize Numerical Features (Mean=0, Std=1)
+        ('imputer', SimpleImputer(strategy='median')),
+        ('scaler', StandardScaler())
     ])
 
+    # Standard categorical conveyor belt
     categorical_conveyor = Pipeline(steps=[
         ('imputer', SimpleImputer(strategy='constant', fill_value='Missing')),
-        ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False)) # Encode Categoricals (One-Hot)
+        ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))
     ])
 
     base_preprocessor = ColumnTransformer(
         transformers=[
-            ('numeric_belt', numeric_conveyor, [col for col in extended_numeric_schema]),
+            ('numeric_belt', numeric_conveyor, extended_numeric_schema),
             ('categorical_belt', categorical_conveyor, cat_features)
         ],
         remainder='drop'
     )
 
-    # =====================================================================
-    # 5. REQUIREMENT: FEATURE ENGINEERING WITH WoE / IV
-    # =====================================================================
-    # Apply WOE directly to the engineered DataFrame prior to any one-hot encoding.
     production_pipeline = Pipeline(steps=[
+        ('rfm_and_volatility', CustomerBehaviorAggregator()),
         ('temporal_extractor', TemporalFeatureExtractor(datetime_col='TransactionStartTime')),
-        ('behavioral_aggregator', CustomerBehaviorAggregator(customer_id_col='CustomerId', amount_col='Amount')),
-        ('woe_transformation', WOETransformer(feature_names=cat_features)) # Local WOE transformation on selected categorical features
+        ('woe_transformation', WOETransformer(feature_names=cat_features)), # Local WOE transformer
+        ('math_preprocessor', base_preprocessor)
     ])
     
-    print("🏋️ Fitting steps on historical rows and executing matrix transformations...")
+    print("⚙️ Executing fit_transform matrix engine across features...")
     processed_matrix = production_pipeline.fit_transform(X_features, y)
     
-    # Structuring Output DataFrame
-    print("🧹 Converting matrix data back into pandas file schemas...")
-    if isinstance(processed_matrix, np.ndarray):
-        output_df = pd.DataFrame(processed_matrix)
-        output_df.columns = [f"feature_{i}" for i in range(output_df.shape[1])]
-    else:
-        output_df = processed_matrix.copy()
-        
-    # Append target data column
-    output_df['Target'] = y
+    # Standardize array mapping back to clean pandas schemas
+    output_df = pd.DataFrame(processed_matrix) if isinstance(processed_matrix, np.ndarray) else processed_matrix.copy()
+    output_df['is_high_risk'] = y
     
-    # Export File Setup
+    # Export Labeled, Engineered Files to Processed Directory Layout
     output_directory = os.path.join(project_root, 'data', 'processed')
     os.makedirs(output_directory, exist_ok=True)
     output_save_file_path = os.path.join(output_directory, 'model_ready_data.csv')
     
-    print(f"💾 Saving instruction-ready data frame asset file to: {output_save_file_path}")
+    print(f" Saving model-ready analytical framework asset to: {output_save_file_path}")
     output_df.to_csv(output_save_file_path, index=False)
-    print(f"✨ Setup Complete! Processed Data Dimensions: {output_df.shape}\n")
-
+    print(f"Setup Complete! Operational Matrix Properties: {output_df.shape}\n")
+    
 if __name__ == "__main__":
     execute_instructional_pipeline()
